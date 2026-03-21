@@ -8,6 +8,7 @@ from chromadb.utils import embedding_functions
 
 load_dotenv()
 client = OpenAI()
+
 openai_ef = embedding_functions.OpenAIEmbeddingFunction(
     api_key=os.getenv("OPENAI_API_KEY"),
     model_name="text-embedding-3-small"
@@ -16,6 +17,7 @@ chroma = chromadb.PersistentClient(path="./chroma_db")
 collection = chroma.get_or_create_collection("visual_rag", embedding_function=openai_ef)
 
 def extract_text_chunks(pdf_path, chunk_size=500):
+    """Extract text from PDF in chunks."""
     doc = fitz.open(pdf_path)
     chunks = []
     for page_num, page in enumerate(doc):
@@ -31,6 +33,7 @@ def extract_text_chunks(pdf_path, chunk_size=500):
     return chunks
 
 def extract_and_caption_images(pdf_path):
+    """Extract images from PDF and caption them with GPT-4o Vision."""
     doc = fitz.open(pdf_path)
     image_data = []
     for page_num, page in enumerate(doc):
@@ -71,6 +74,7 @@ def extract_and_caption_images(pdf_path):
     return image_data
 
 def embed_and_store(chunks, image_data, pdf_name):
+    """Embed all content and store in ChromaDB."""
     all_texts = []
     all_ids = []
     all_metadata = []
