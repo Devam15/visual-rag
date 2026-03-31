@@ -14,7 +14,6 @@ openai_ef = embedding_functions.OpenAIEmbeddingFunction(
     model_name="text-embedding-3-small"
 )
 chroma = chromadb.PersistentClient(path="./chroma_db")
-collection = chroma.get_or_create_collection("visual_rag", embedding_function=openai_ef)
 
 def extract_text_chunks(pdf_path, chunk_size=500):
     """Extract text from PDF in chunks."""
@@ -73,7 +72,7 @@ def extract_and_caption_images(pdf_path):
             })
     return image_data
 
-def embed_and_store(chunks, image_data, pdf_name):
+def embed_and_store(chunks, image_data, pdf_name, collection):
     """Embed all content and store in ChromaDB."""
     all_texts = []
     all_ids = []
@@ -97,12 +96,30 @@ def embed_and_store(chunks, image_data, pdf_name):
 def ingest(pdf_path, custom_name=None):
     pdf_name = custom_name if custom_name else os.path.basename(pdf_path).replace(".pdf", "")
     print(f"Ingesting: {pdf_path}")
+    
+    # Each document gets its own collection
+    doc_collection = chroma.get_or_create_collection(
+        f"doc_{pdf_name}",
+        embedding_function=openai_ef
+    )
+    # Also add to the master collection for "search all" queries
+    master_collection = chroma.get_or_create_collection(
+        "all_documents",
+        embedding_function=openai_ef
+    )
+    
     print("Extracting text...")
     chunks = extract_text_chunks(pdf_path)
     print("Extracting & captioning images...")
     image_data = extract_and_caption_images(pdf_path)
+    
+    if not chunks and not image_data:
+        print("No content found in PDF — it may be a scanned document.")
+        return
+    
     print("Embedding and storing...")
-    embed_and_store(chunks, image_data, pdf_name)
+    embed_and_store(chunks, image_data, pdf_name, doc_collection)
+    embed_and_store(chunks, image_data, pdf_name, master_collection)
     print("Done!")
 
 if __name__ == "__main__":

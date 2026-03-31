@@ -12,11 +12,23 @@ openai_ef = embedding_functions.OpenAIEmbeddingFunction(
     model_name="text-embedding-3-small"
 )
 chroma = chromadb.PersistentClient(path="./chroma_db")
-collection = chroma.get_or_create_collection("visual_rag", embedding_function=openai_ef)
 
-def query(question, n_results=3):
+def query(question,doc_name= None, n_results=3):
     print(f"\nQuestion: {question}")
     print("-" * 50)
+
+    if doc_name:
+        collection = chroma.get_or_create_collection(
+            f"doc_{doc_name}",
+            embedding_function=openai_ef
+        )
+        print(f"Searching in: {doc_name}")
+    else:
+        collection = chroma.get_or_create_collection(
+            "all_documents",
+            embedding_function=openai_ef
+        )
+        print("Searching across all documents")
 
     # Find most relevant chunks
     results = collection.query(query_texts=[question], n_results=n_results)
