@@ -59,23 +59,46 @@ st.markdown("""
         font-weight: 600;
         margin-right: 0.3rem;
     }
+    .doc-item {
+        background: #1a2744;
+        border: 1px solid #2d4a6f;
+        border-radius: 8px;
+        padding: 0.6rem 0.8rem;
+        margin-bottom: 0.5rem;
+        font-size: 0.85rem;
+        color: #b8d4f0;
+    }
+    .confidence-high { color: #4caf50; font-weight: 600; }
+    .confidence-mid { color: #ff9800; font-weight: 600; }
+    .confidence-low { color: #f44336; font-weight: 600; }
 </style>
 """, unsafe_allow_html=True)
+
+# Helper to get doc collections
+def get_doc_collections():
+    try:
+        collections = chroma.list_collections()
+        return [c for c in collections if c.name.startswith("doc_")]
+    except:
+        return []
+
+# Helper to get confidence label
+def confidence_label(relevance):
+    if relevance >= 70:
+        return f'<span class="confidence-high">🟢 {relevance}% match</span>'
+    elif relevance >= 40:
+        return f'<span class="confidence-mid">🟡 {relevance}% match</span>'
+    else:
+        return f'<span class="confidence-low">🔴 {relevance}% match</span>'
 
 # Sidebar
 with st.sidebar:
     st.markdown("## 🔍 Visual RAG")
     st.markdown("---")
 
-    # Document count
-    try:
-        collections = chroma.list_collections()
-        doc_collections = [c for c in collections if c.name.startswith("doc_")]
-        doc_count = len(doc_collections)
-        st.markdown(f'<div class="doc-count">📚 {doc_count} document{"s" if doc_count != 1 else ""} indexed</div>', unsafe_allow_html=True)
-    except:
-        doc_count = 0
-        doc_collections = []
+    doc_collections = get_doc_collections()
+    doc_count = len(doc_collections)
+    st.markdown(f'<div class="doc-count">📚 {doc_count} document{"s" if doc_count != 1 else ""} indexed</div>', unsafe_allow_html=True)
 
     st.markdown("### Upload a PDF")
     uploaded_file = st.file_uploader("", type=["pdf"])
@@ -95,6 +118,34 @@ with st.sidebar:
             st.rerun()
 
     st.markdown("---")
+
+    # Document list with chunk count and delete
+    if doc_count > 0:
+        st.markdown("### Indexed documents")
+        for col in doc_collections:
+            doc_display_name = col.name.replace("doc_", "")
+            try:
+                chunk_count = col.count()
+            except:
+                chunk_count = 0
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                st.markdown(f'<div class="doc-item">📄 {doc_display_name}<br><small>{chunk_count} chunks</small></div>', unsafe_allow_html=True)
+            with col2:
+                if st.button("🗑️", key=f"del_{doc_display_name}", help=f"Delete {doc_display_name}"):
+                    try:
+                        chroma.delete_collection(col.name)
+                        # Also remove from master collection
+                        master = chroma.get_or_create_collection("all_documents", embedding_function=openai_ef)
+                        existing = master.get(where={"source": doc_display_name})
+                        if existing["ids"]:
+                            master.delete(ids=existing["ids"])
+                        st.success(f"Deleted {doc_display_name}")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error deleting: {e}")
+
+    st.markdown("---")
     st.markdown("### Search in")
 
     if doc_count == 0:
@@ -106,8 +157,6 @@ with st.sidebar:
         selected_doc = st.selectbox("", options)
 
     st.markdown("---")
-
-    # Clear chat button
     if st.button("🗑️ Clear chat", use_container_width=True):
         st.session_state.messages = []
         st.rerun()
@@ -175,7 +224,11 @@ if question := st.chat_input("Ask a question about your documents..."):
                 if meta["type"] == "image":
                     images_found.append(meta)
                 relevance = round((1 - dist) * 100, 1)
-                sources_used.append(f"{meta['source']} (page {meta['page']}, {relevance}% match)")
+                sources_used.append({
+                    "name": meta["source"],
+                    "page": meta["page"],
+                    "relevance": relevance
+                })
 
             user_content = [{"type": "text", "text": f"Using the following context, answer this question: {question}\n\nContext:\n{context}"}]
             for img_meta in images_found:
@@ -196,11 +249,14 @@ if question := st.chat_input("Ask a question about your documents..."):
             answer = response.choices[0].message.content
             st.markdown(answer)
 
-            # Source highlights
+            # Source highlights with confidence
             st.markdown("---")
             st.markdown("**📎 Sources used:**")
             for src in sources_used:
-                st.markdown(f'<span class="source-badge">{src}</span>', unsafe_allow_html=True)
+                st.markdown(
+                    f'<span class="source-badge">{src["name"]} — page {src["page"]}</span> {confidence_label(src["relevance"])}',
+                    unsafe_allow_html=True
+                )
 
             if images_found:
                 st.markdown("**🖼️ Referenced images:**")
