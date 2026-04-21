@@ -1,5 +1,7 @@
 # 🔍 Visual RAG — Technical Document Q&A
 
+🌐 **Live demo:** [visual-rag-hbnmx3anuah8yudt6gwa7a.streamlit.app](https://visual-rag-hbnmx3anuah8yudt6gwa7a.streamlit.app)
+
 An AI-powered system that lets you ask questions about technical documents — including charts, diagrams, and images — using Retrieval-Augmented Generation (RAG) with vision capabilities.
 
 ## 📌 What it does
@@ -98,3 +100,4 @@ visual-rag/
 ├── .env.example    # Environment variable template
 └── chroma_db/      # Vector database (auto-generated, gitignored)
 ```
+
