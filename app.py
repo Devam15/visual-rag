@@ -8,6 +8,7 @@ from openai import OpenAI
 from dotenv import load_dotenv
 from chromadb.utils import embedding_functions
 from ingest import ingest
+from database import init_db, log_query, get_total_queries, get_avg_confidence, get_most_queried_documents, get_recent_queries, delete_all_logs
 
 load_dotenv()
 client = OpenAI()
@@ -16,6 +17,7 @@ openai_ef = embedding_functions.OpenAIEmbeddingFunction(
     model_name="text-embedding-3-small"
 )
 chroma = chromadb.PersistentClient(path="./chroma_db")
+init_db()
 
 st.set_page_config(page_title="Visual RAG", page_icon="🔍", layout="wide")
 
@@ -135,7 +137,6 @@ with st.sidebar:
                 if st.button("🗑️", key=f"del_{doc_display_name}", help=f"Delete {doc_display_name}"):
                     try:
                         chroma.delete_collection(col.name)
-                        # Also remove from master collection
                         master = chroma.get_or_create_collection("all_documents", embedding_function=openai_ef)
                         existing = master.get(where={"source": doc_display_name})
                         if existing["ids"]:
@@ -161,7 +162,7 @@ with st.sidebar:
         st.session_state.messages = []
         st.rerun()
 
-# Main area
+# Main area header
 st.markdown("""
 <div class="main-header">
     <h1>🔍 Visual RAG — Technical Document Q&A</h1>
@@ -169,103 +170,158 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+# Tabs
+tab1, tab2 = st.tabs(["💬 Chat", "📊 Analytics"])
 
-# Welcome screen
-if not st.session_state.messages:
-    st.markdown("""
-    <div class="welcome-box">
-        <h2>👋 Welcome to Visual RAG</h2>
-        <p>Upload a PDF in the sidebar and start asking questions.<br>
-        The AI will search through text <strong>and</strong> images to find your answer.</p>
-        <br>
-        <p>💡 Try asking things like:<br>
-        <em>"What is the main conclusion?"</em> &nbsp;|&nbsp;
-        <em>"Explain the diagram on page 3"</em> &nbsp;|&nbsp;
-        <em>"What are the key findings?"</em></p>
-    </div>
-    """, unsafe_allow_html=True)
+# ── Analytics tab ──
+with tab2:
+    st.markdown("### Query Analytics")
 
-# Display chat history
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
-        if "images" in message and message["images"]:
-            for img in message["images"]:
-                img_bytes = base64.b64decode(img["img_b64"])
-                st.image(img_bytes, caption=f"📄 Page {img['page']} — {img['source']}", width=400)
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Queries", get_total_queries())
+    with col2:
+        st.metric("Avg Confidence", f"{get_avg_confidence()}%")
+    with col3:
+        st.metric("Documents Indexed", doc_count)
 
-# Chat input
-if question := st.chat_input("Ask a question about your documents..."):
-    st.session_state.messages.append({"role": "user", "content": question})
-    with st.chat_message("user"):
-        st.markdown(question)
+    st.markdown("---")
 
-    with st.chat_message("assistant"):
-        search_msg = f"Searching across {doc_count} document{'s' if doc_count != 1 else ''}..." if selected_doc == "All documents" else f"Searching in {selected_doc}..."
-        with st.spinner(search_msg):
+    st.markdown("#### Most Queried Documents")
+    most_queried = get_most_queried_documents()
+    if most_queried:
+        for doc, count in most_queried:
+            st.markdown(f"**{doc}** — {count} quer{'y' if count == 1 else 'ies'}")
+    else:
+        st.caption("No queries yet.")
 
-            if selected_doc == "All documents":
-                collection = chroma.get_or_create_collection("all_documents", embedding_function=openai_ef)
-            else:
-                collection = chroma.get_or_create_collection(f"doc_{selected_doc}", embedding_function=openai_ef)
+    st.markdown("---")
 
-            results = collection.query(query_texts=[question], n_results=3)
-            documents = results["documents"][0]
-            metadatas = results["metadatas"][0]
-            distances = results["distances"][0]
+    st.markdown("#### Recent Queries")
+    recent = get_recent_queries()
+    if recent:
+        for timestamp, question, doc, confidence in recent:
+            with st.expander(f"🕐 {timestamp} — {question[:60]}..."):
+                st.markdown(f"**Document:** {doc}")
+                st.markdown(f"**Confidence:** {confidence}%")
+    else:
+        st.caption("No queries yet.")
 
-            context = ""
-            images_found = []
-            sources_used = []
-            for i, (doc, meta, dist) in enumerate(zip(documents, metadatas, distances)):
-                context += f"\n[Source {i+1} - Page {meta['page']} - Type: {meta['type']} - Document: {meta['source']}]\n{doc}\n"
-                if meta["type"] == "image":
-                    images_found.append(meta)
-                relevance = round((1 - dist) * 100, 1)
-                sources_used.append({
-                    "name": meta["source"],
-                    "page": meta["page"],
-                    "relevance": relevance
-                })
+    st.markdown("---")
+    if st.button("🗑️ Clear all logs", use_container_width=True):
+        delete_all_logs()
+        st.success("All logs cleared!")
+        st.rerun()
 
-            user_content = [{"type": "text", "text": f"Using the following context, answer this question: {question}\n\nContext:\n{context}"}]
-            for img_meta in images_found:
-                user_content.append({
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/png;base64,{img_meta['img_b64']}"}
-                })
+# ── Chat tab ──
+with tab1:
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
 
-            response = client.chat.completions.create(
-                model="gpt-4o",
-                messages=[
-                    {"role": "system", "content": "You are a helpful assistant answering questions about technical documents. Always cite which document and page your answer comes from."},
-                    {"role": "user", "content": user_content}
-                ],
-                max_tokens=500
-            )
+    # Welcome screen
+    if not st.session_state.messages:
+        st.markdown("""
+        <div class="welcome-box">
+            <h2>👋 Welcome to Visual RAG</h2>
+            <p>Upload a PDF in the sidebar and start asking questions.<br>
+            The AI will search through text <strong>and</strong> images to find your answer.</p>
+            <br>
+            <p>💡 Try asking things like:<br>
+            <em>"What is the main conclusion?"</em> &nbsp;|&nbsp;
+            <em>"Explain the diagram on page 3"</em> &nbsp;|&nbsp;
+            <em>"What are the key findings?"</em></p>
+        </div>
+        """, unsafe_allow_html=True)
 
-            answer = response.choices[0].message.content
-            st.markdown(answer)
+    # Display chat history
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+            if "images" in message and message["images"]:
+                for img in message["images"]:
+                    img_bytes = base64.b64decode(img["img_b64"])
+                    st.image(img_bytes, caption=f"📄 Page {img['page']} — {img['source']}", width=400)
 
-            # Source highlights with confidence
-            st.markdown("---")
-            st.markdown("**📎 Sources used:**")
-            for src in sources_used:
-                st.markdown(
-                    f'<span class="source-badge">{src["name"]} — page {src["page"]}</span> {confidence_label(src["relevance"])}',
-                    unsafe_allow_html=True
+    # Chat input
+    if question := st.chat_input("Ask a question about your documents..."):
+        st.session_state.messages.append({"role": "user", "content": question})
+        with st.chat_message("user"):
+            st.markdown(question)
+
+        with st.chat_message("assistant"):
+            search_msg = f"Searching across {doc_count} document{'s' if doc_count != 1 else ''}..." if selected_doc == "All documents" else f"Searching in {selected_doc}..."
+            with st.spinner(search_msg):
+
+                if selected_doc == "All documents":
+                    collection = chroma.get_or_create_collection("all_documents", embedding_function=openai_ef)
+                else:
+                    collection = chroma.get_or_create_collection(f"doc_{selected_doc}", embedding_function=openai_ef)
+
+                results = collection.query(query_texts=[question], n_results=3)
+                documents = results["documents"][0]
+                metadatas = results["metadatas"][0]
+                distances = results["distances"][0]
+
+                context = ""
+                images_found = []
+                sources_used = []
+                for i, (doc, meta, dist) in enumerate(zip(documents, metadatas, distances)):
+                    context += f"\n[Source {i+1} - Page {meta['page']} - Type: {meta['type']} - Document: {meta['source']}]\n{doc}\n"
+                    if meta["type"] == "image":
+                        images_found.append(meta)
+                    relevance = round((1 - dist) * 100, 1)
+                    sources_used.append({
+                        "name": meta["source"],
+                        "page": meta["page"],
+                        "relevance": relevance
+                    })
+
+                user_content = [{"type": "text", "text": f"Using the following context, answer this question: {question}\n\nContext:\n{context}"}]
+                for img_meta in images_found:
+                    user_content.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{img_meta['img_b64']}"}
+                    })
+
+                response = client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=[
+                        {"role": "system", "content": "You are a helpful assistant answering questions about technical documents. Always cite which document and page your answer comes from."},
+                        {"role": "user", "content": user_content}
+                    ],
+                    max_tokens=500
                 )
 
-            if images_found:
-                st.markdown("**🖼️ Referenced images:**")
-                for img in images_found:
-                    img_bytes = base64.b64decode(img["img_b64"])
-                    st.image(img_bytes, caption=f"Page {img['page']} — {img['source']}", width=400)
+                answer = response.choices[0].message.content
+                st.markdown(answer)
 
-            st.session_state.messages.append({
-                "role": "assistant",
-                "content": answer,
-                "images": images_found
-            })
+                # Source highlights with confidence
+                st.markdown("---")
+                st.markdown("**📎 Sources used:**")
+                for src in sources_used:
+                    st.markdown(
+                        f'<span class="source-badge">{src["name"]} — page {src["page"]}</span> {confidence_label(src["relevance"])}',
+                        unsafe_allow_html=True
+                    )
+
+                if images_found:
+                    st.markdown("**🖼️ Referenced images:**")
+                    for img in images_found:
+                        img_bytes = base64.b64decode(img["img_b64"])
+                        st.image(img_bytes, caption=f"Page {img['page']} — {img['source']}", width=400)
+
+                avg_confidence = round(sum([s["relevance"] for s in sources_used]) / len(sources_used), 1) if sources_used else 0
+                log_query(
+                    question=question,
+                    answer=answer,
+                    document_searched=selected_doc,
+                    avg_confidence_score=avg_confidence,
+                    num_images_retrieved=len(images_found),
+                    num_chunks_retrieved=len(documents)
+                )
+
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": answer,
+                    "images": images_found
+                })
