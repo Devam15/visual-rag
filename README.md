@@ -15,6 +15,7 @@ Most AI systems only read text. This system can **see and reason** through techn
 - Citing the exact page and document each answer came from
 - Showing confidence scores for each retrieved source
 - Supporting per-document and cross-document search
+- Logging all queries to a SQLite database with an analytics dashboard
 
 ## 🖥️ Demo
 
@@ -39,6 +40,7 @@ User Question
 | Embeddings | OpenAI text-embedding-3-small |
 | Vector database | ChromaDB |
 | LLM | GPT-4o |
+| Query logging | SQLite |
 | UI | Streamlit |
 
 
@@ -98,6 +100,7 @@ visual-rag/
 ├── ingest.py       # PDF ingestion pipeline
 ├── query.py        # Command line query interface
 ├── .env.example    # Environment variable template
+├── database.py     # SQL query logging and analytics
 └── chroma_db/      # Vector database (auto-generated, gitignored)
 ```
 
