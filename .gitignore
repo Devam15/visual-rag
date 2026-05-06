@@ -216,3 +216,4 @@ __marimo__/
 .streamlit/secrets.toml
 .env
 chroma_db/
+query_logs.db
